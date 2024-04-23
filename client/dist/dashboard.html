@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard</title>
+</head>
+<body>
+    <h1>Adverts Dashboard</h1>
+    <button onclick="window.location.href='newadvert.html'">Post New Ad</button>
+    <h2>All Adverts</h2>
+    <div id="advertsList"></div>
+
+    <script>
+        window.onload = function() {
+            const token = localStorage.getItem('userToken');
+            if (!token) {
+                console.error('No token found. Redirecting to login.');
+                window.location.href = 'index.html'; // Redirect to login if no token is found
+            } else {
+                console.log('Token found:', token);
+                initializePage(); // Continue initializing your page or making API calls
+                loadAdverts(); // Load adverts with token authentication
+            }
+        };
+
+        function initializePage() {
+            // Initialize your page functions here
+            console.log('Page is initialized with valid token.');
+        }
+
+        function loadAdverts() {
+            const token = localStorage.getItem('userToken');
+            if (!token) {
+                console.error("No authentication token found. Please log in.");
+                return;
+            }
+
+            fetch('api/adverts', {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${token}`, // Include the token as a Bearer token
+                    'Content-Type': 'application/json',
+                    'Cache-Control': 'no-cache' // Assuming you're sending or expecting JSON data
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok: ' + response.statusText);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log('Data fetched successfully:', data);
+                displayAdverts(data.adverts); // Assuming 'data.adverts' is the array of adverts
+            })
+            .catch(error => {
+                console.error('Failed to fetch data:', error);
+            });
+        }
+
+        function displayAdverts(adverts) {
+            const container = document.getElementById('advertsList');
+            const table = document.createElement('table');
+            table.innerHTML = `
+                <tr>
+                    <th>ID</th>
+                    <th>Title</th>
+                    <th>Category</th>
+                    <th>Price</th>
+                    <th>Description</th>
+                </tr>
+            `;
+
+            adverts.forEach(advert => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td><a href="advert_comments.html?id=${advert.id}">${advert.id}</a></td>
+                    <td>${advert.title}</td>
+                    <td>${advert.category}</td>
+                    <td>${advert.price}</td>
+                    <td>${advert.description}</td>
+                `;
+                table.appendChild(row);
+            });
+
+            container.innerHTML = ''; // Clear previous entries
+            container.appendChild(table); // Append the new table to the container
+        }
+    </script>
+</body>
+</html>
