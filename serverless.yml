@@ -1,0 +1,279 @@
+service: aws-web-frontandbackend
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: python3.8
+  stage: dev
+  region: 'eu-west-1'
+  environment:
+    STACK_NAME: ${self:service}-${self:provider.stage}
+    REGION: ${self:provider.region}
+    ADVERTS_TABLE_NAME: ${self:service}-adverts-${self:provider.stage}
+    COMMENTS_TABLE_NAME: ${self:service}-comments-${self:provider.stage}
+  iamRoleStatements:
+    - Effect: "Allow"
+      Action:
+        - "dynamodb:*"
+      Resource: "*"
+
+plugins:
+  - serverless-finch
+  - serverless-scriptable-plugin
+
+custom:
+  client:
+    bucketName: jsoriano-bucket-frontend-web
+    distributionFolder: client/dist
+    indexDocument: index.html
+    errorDocument: error.html
+  scriptable:
+    hooks:
+      'after:deploy:deploy': 'node scripts/generateConfig.js'
+  clientOrigin: http://${self:custom.client.bucketName}.s3-website-${self:provider.region}.amazonaws.com
+
+functions:
+  getAllAdverts:
+    handler: handler.getAllAdverts
+    events:
+      - http:
+          path: api/adverts
+          method: get
+          cors: true
+          authorizer:
+            name: MyCognitoUserPoolAuthorizer
+            type: COGNITO_USER_POOLS
+            arn:
+              Fn::GetAtt:
+                - MyUserPool
+                - Arn
+
+  getAdvertDetails:
+    handler: handler.getAdvertDetails
+    events:
+      - http:
+          path: api/adverts/{id}
+          method: get
+          cors: true
+          authorizer:
+            name: MyCognitoUserPoolAuthorizer
+            type: COGNITO_USER_POOLS
+            arn:
+              Fn::GetAtt:
+                - MyUserPool
+                - Arn
+  postAdvert:
+    handler: handler.postAdvert
+    events:
+      - http:
+          path: api/adverts
+          method: post
+          cors: true
+          authorizer:
+            name: MyCognitoUserPoolAuthorizer
+            type: COGNITO_USER_POOLS
+            arn:
+              Fn::GetAtt:
+                - MyUserPool
+                - Arn
+
+  postAdvertComment:
+    handler: handler.postAdvertComment
+    events:
+      - http:
+          path: /api/adverts/{id}/comment
+          method: post
+          cors: true
+          authorizer:
+            name: MyCognitoUserPoolAuthorizer
+            type: COGNITO_USER_POOLS
+            arn:
+              Fn::GetAtt:
+                - MyUserPool
+                - Arn
+
+  getAdvertComments:
+    handler: handler.getAdvertComments
+    events:
+      - http:
+          path: /api/adverts/{id}/comment
+          method: get
+          cors: true
+          authorizer:
+            name: MyCognitoUserPoolAuthorizer
+            type: COGNITO_USER_POOLS
+            arn:
+              Fn::GetAtt:
+                - MyUserPool
+                - Arn
+
+resources:
+  Resources:
+    AdvertsTable:
+      Type: "AWS::DynamoDB::Table"
+      Properties:
+        TableName: ${self:service}-adverts-${self:provider.stage}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: userEmail
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: UserEmailIndex
+            KeySchema:
+              - AttributeName: userEmail
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+        Tags:
+          - Key: Environment
+            Value: ${self:provider.stage}
+    CommentsTable:
+      Type: "AWS::DynamoDB::Table"
+      Properties:
+        TableName: ${self:service}-comments-${self:provider.stage}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: advertId
+            AttributeType: S
+          - AttributeName: timestamp
+            AttributeType: S
+          - AttributeName: userEmail
+            AttributeType: S
+          
+        KeySchema:
+          - AttributeName: advertId
+            KeyType: HASH
+          - AttributeName: timestamp
+            KeyType: RANGE   # Using timestamp as sort key
+        GlobalSecondaryIndexes:
+          - IndexName: UserEmailIndex
+            KeySchema:
+              - AttributeName: userEmail
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+        Tags:
+          - Key: Environment
+            Value: ${self:provider.stage}
+
+    MyCognitoIdentityPool:
+      Type: "AWS::Cognito::IdentityPool"
+      Properties:
+        IdentityPoolName: "MyCognitoIdentityPool"
+        AllowUnauthenticatedIdentities: false
+
+    MyUserPool:
+      Type: "AWS::Cognito::UserPool"
+      Properties:
+        UserPoolName: "MyUserPool"
+        Schema:
+          - Name: email
+            Required: true
+            Mutable: false
+        Policies:
+          PasswordPolicy:
+            MinimumLength: 8
+            RequireLowercase: true
+            RequireUppercase: true
+            RequireNumbers: true
+            RequireSymbols: true
+        AutoVerifiedAttributes:
+          - email
+
+    MyCognitoAppClient:
+      Type: "AWS::Cognito::UserPoolClient"
+      Properties:
+        ClientName: "MyAppClient"
+        UserPoolId:
+          Ref: MyUserPool
+        GenerateSecret: false
+
+    CloudFrontDistribution:
+      Type: AWS::CloudFront::Distribution
+      Properties:
+        DistributionConfig:
+          Enabled: true
+          DefaultRootObject: index.html
+          Origins:
+            - Id: S3-Website
+              DomainName: ${self:custom.client.bucketName}.s3-website-${self:provider.region}.amazonaws.com
+              CustomOriginConfig:
+                OriginProtocolPolicy: http-only
+            - Id: API-Gateway
+              DomainName:
+                Fn::Join:
+                  - ""
+                  - - Ref: ApiGatewayRestApi
+                    - ".execute-api."
+                    - ${self:provider.region}
+                    - ".amazonaws.com"
+              OriginPath: /dev
+              CustomOriginConfig:
+                OriginProtocolPolicy: https-only
+                OriginSSLProtocols:
+                  - TLSv1.2
+          DefaultCacheBehavior:
+            TargetOriginId: S3-Website
+            ViewerProtocolPolicy: redirect-to-https
+            ForwardedValues:
+              QueryString: false
+              Cookies:
+                Forward: none
+          CacheBehaviors:
+            - PathPattern: '/api/*'
+              TargetOriginId: API-Gateway
+              ViewerProtocolPolicy: redirect-to-https
+              AllowedMethods:
+                - HEAD
+                - DELETE
+                - POST
+                - GET
+                - OPTIONS
+                - PUT
+                - PATCH
+              CachedMethods:
+                - HEAD
+                - GET
+                - OPTIONS
+              ForwardedValues:
+                QueryString: true
+                Headers:
+                  - Authorization
+                Cookies:
+                  Forward: all
+          ViewerCertificate:
+            CloudFrontDefaultCertificate: true    
+  Outputs:
+    UserPoolId:
+      Value:
+        Ref: MyUserPool
+      Export:
+        Name: ${self:service}:${self:provider.stage}:UserPoolId
+    IdentityPoolId:
+      Value:
+        Ref: MyCognitoIdentityPool
+      Export:
+        Name: ${self:service}:${self:provider.stage}:IdentityPoolId
+    UserPoolClientId:
+      Description: "The Client ID of the User Pool App Client"
+      Value:
+        Ref: MyCognitoAppClient
+      Export:
+        Name: ${self:service}-${opt:stage, self:provider.stage}-UserPoolClientId
+
+    ApiUrl:
+      Description: "URL of the deployed API Gateway"
+      Value: 
+        Fn::Join:
+          - ""
+          - - "https://"
+            - Ref: "ApiGatewayRestApi"
+            - ".execute-api."
+            - ${self:provider.region}
+            - ".amazonaws.com/${self:provider.stage}/"
+            
